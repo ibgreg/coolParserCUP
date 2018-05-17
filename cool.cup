@@ -1,0 +1,327 @@
+/*
+ *  cool.cup
+ *              Parser definition for the COOL language.
+ *
+ */
+
+import java_cup.runtime.*;
+
+/* Stuff enclosed in {: :} is copied verbatim to the class containing
+all parser actions.  All the extra variables/functions you want to use
+in the semantic actions should go here.  Don't remove or modify anything
+that was there initially.  */
+
+action code {: 
+
+    int curr_lineno() {
+	return ((CoolTokenLexer)parser.getScanner()).curr_lineno();
+    }
+
+    AbstractSymbol curr_filename() {
+	return ((CoolTokenLexer)parser.getScanner()).curr_filename();
+    }
+
+    let createLet(int line_no, Features features, Expression e, int counter){
+    	if(counter == features.getLength()-1){
+    		return new let(curr_lineno(), ((attr) features.getNth(counter)).name, ((attr) features.getNth(counter)).type_decl,
+    			((attr) features.getNth(counter)).init, e);
+    	}else {
+    		return new let(curr_lineno(), ((attr) features.getNth(counter)).name, ((attr) features.getNth(counter)).type_decl,
+    			((attr) features.getNth(counter)).init, createLet(line_no, features, e, ++counter));
+    	}
+    }
+
+:} 
+
+/************************************************************************/
+/*                DON'T CHANGE ANYTHING IN THIS SECTION                 */
+
+parser code {:
+    int omerrs = 0;
+
+    public void syntax_error(Symbol cur_token) {
+        int lineno = action_obj.curr_lineno();
+	String filename = action_obj.curr_filename().getString();
+        System.err.print("\"" + filename + "\", line " + lineno + 
+		         ": parse error at or near ");
+        Utilities.printToken(cur_token);
+	omerrs++;
+	if (omerrs>50) {
+	   System.err.println("More than 50 errors");
+	   System.exit(1);
+	}
+    }
+
+    public void unrecovered_syntax_error(Symbol cur_token) {
+    }
+:}
+
+
+/* Declare the terminals; a few have types for associated lexemes.  The
+token ERROR is never used in the parser; thus, it is a parse error when
+the lexer returns it.  */
+terminal CLASS, ELSE, FI, IF, IN, INHERITS, LET, LET_STMT, LOOP, POOL, THEN, WHILE;
+terminal CASE, ESAC, OF, DARROW, NEW, ISVOID;
+terminal ASSIGN, NOT, LE, ERROR;
+terminal PLUS, DIV, MINUS, MULT, EQ, LT, DOT, NEG, COMMA, SEMI, COLON;
+terminal LPAREN, RPAREN, AT, LBRACE, RBRACE;
+terminal AbstractSymbol STR_CONST, INT_CONST;
+terminal Boolean BOOL_CONST;
+terminal AbstractSymbol TYPEID, OBJECTID;
+
+/*  DON'T CHANGE ANYTHING ABOVE THIS LINE, OR YOUR PARSER WON'T WORK      */
+/**************************************************************************/
+
+
+   /* Complete the nonterminal list below, giving a type for the semantic
+      value of each non terminal. (See the CUP documentation for details. */
+
+nonterminal programc program;
+nonterminal Classes class_list;
+nonterminal class_c class;
+nonterminal Features optional_feature_list, let_attr_list;
+nonterminal Expression expr;
+nonterminal Expressions actuals, exp_list, blk_expr;
+nonterminal Feature feature, let_attr;
+nonterminal Formals optional_formal_list;
+nonterminal formalc formal;
+nonterminal Cases case_list;
+nonterminal Case case;
+
+/*
+ * Precedence declarations.
+ */
+/*** FILL-IN HERE ***/
+/* From COOL manual precedence order highest to lowest
+.
+@
+~
+isvoid
+* /
++ -
+<= < =
+not
+<-
+*/
+
+/* Precedence declarations go here. */
+precedence right ASSIGN;
+precedence right NOT;
+precedence nonassoc LE, LT, EQ;
+precedence left PLUS, MINUS;
+precedence left MULT, DIV;
+precedence right ISVOID;
+precedence right NEG;
+precedence nonassoc AT;
+precedence left DOT;
+
+
+program	
+	::= class_list:cl
+	    {: //System.err.println("Reached program production");
+	    	RESULT = new programc(curr_lineno(), cl); :}
+	| error
+	    {: //System.err.println("Reached program error production");
+	    	RESULT = new programc(curr_lineno(),
+                                     new Classes(curr_lineno())); :}
+        ;
+
+
+class_list
+	::= class:c
+	    {:  //System.err.println("Reached first class list production");
+	    	RESULT = (new Classes(curr_lineno())).appendElement(c); :}
+	| class_list:cl class:c
+	    {: //System.err.println("Reached second class list production");
+	    	RESULT = cl.appendElement(c); :}
+	;
+
+
+/* Class declarations
+ *
+ * If no parent is specified, the class inherits from the Object class.
+ */
+class
+	::= CLASS TYPEID:n LBRACE optional_feature_list:f RBRACE SEMI
+	    {:  //System.err.println("Reached first class production");
+	    	RESULT = new class_c(curr_lineno(), n, 
+		                    AbstractTable.idtable.addString("Object"), 
+				    f, curr_filename());  :}
+	| CLASS TYPEID:n INHERITS TYPEID:p LBRACE optional_feature_list:f RBRACE SEMI
+	    {: 	//System.err.println("Reached second class production");
+	    	RESULT = new class_c(curr_lineno(), n, p, f, curr_filename()); :}
+	| error SEMI
+	    {: //System.err.println("Reached program error production");
+	    	RESULT = new class_c(curr_lineno(), AbstractTable.idtable.addString("Object"),
+	    		                  AbstractTable.idtable.addString("Object"),
+	    		                  new Features(curr_lineno()), curr_filename()); :}
+	;
+
+optional_feature_list
+	::= feature:f
+		{: //System.err.println("Reached first feature list production");
+			RESULT = new Features(curr_lineno()).appendElement(f);:}
+	| optional_feature_list:ofl feature:f
+		{: //System.err.println("Reached second feature list production");
+			RESULT = ofl.appendElement(f); :}
+	| /* empty */
+	    {: //System.err.println("Reached third feature list production");
+	    	RESULT = new Features(curr_lineno()); :}
+	;
+
+feature
+	::= OBJECTID:o LPAREN optional_formal_list:ofl RPAREN COLON TYPEID:t LBRACE expr:e RBRACE SEMI
+		{: //System.err.println("Reached method production");
+			RESULT = new method(curr_lineno(), o, ofl, t, e);:}
+	|	OBJECTID:o COLON TYPEID:t ASSIGN expr:e SEMI
+		{: //System.err.println("Reached first attr feature production");
+			RESULT = new attr(curr_lineno(), o, t, e);:}
+	| OBJECTID:o COLON TYPEID:t SEMI
+		{: //System.err.println("Reached second attr feature production");
+			RESULT = new attr(curr_lineno(), o, t, new no_expr(curr_lineno()));:}
+	| error SEMI
+	    {: //System.err.println("Reached program error production");
+	    	RESULT = new attr(curr_lineno(), AbstractTable.idtable.addString("self"),
+	    		                  AbstractTable.idtable.addString("Object"),
+	    		                  new no_expr(curr_lineno())); :}
+	;
+
+let_attr
+	::= OBJECTID:o COLON TYPEID:t ASSIGN expr:e
+		{: //System.err.println("Reached first attr feature production");
+			RESULT = new attr(curr_lineno(), o, t, e);:}
+	| OBJECTID:o COLON TYPEID:t
+		{: //System.err.println("Reached second attr feature production");
+			RESULT = new attr(curr_lineno(), o, t, new no_expr(curr_lineno()));:}
+	| error
+	    {: //System.err.println("Reached program error production");
+	    	RESULT = new attr(curr_lineno(), AbstractTable.idtable.addString("self"),
+	    		                  AbstractTable.idtable.addString("Object"),
+	    		                  new no_expr(curr_lineno())); :}
+	;
+
+optional_formal_list
+	::= formal:f
+		{: //System.err.println("Reached first formal list production");
+			RESULT = new Formals(curr_lineno()).appendElement(f);:}
+	| optional_formal_list:ofl COMMA formal:f
+		{: //System.err.println("Reached second formal list production");
+			RESULT = ofl.appendElement(f);:}
+	| /* empty */
+		{: RESULT = new Formals(curr_lineno());:}
+	;
+
+formal
+	::= OBJECTID:o COLON TYPEID:t
+		{:  //System.err.println("Reached formal production");
+			RESULT = new formalc(curr_lineno(), o, t);:}
+    //| error COLON TYPEID:t | OBJECTID:o COLON error | error COLON error
+	//    {: //System.err.println("Reached program error production");
+	//    	RESULT = new attr(curr_lineno(), AbstractTable.idtable.addString("self"),
+	//    		                  AbstractTable.idtable.addString("Object"),
+	//    		                  new no_expr(curr_lineno())); :}
+	;
+
+expr
+	::= OBJECTID:o ASSIGN expr:e
+	    {: RESULT = new assign(curr_lineno(), o, e); :}
+	| expr:e DOT OBJECTID:o actuals:a
+	    {: RESULT = new dispatch(curr_lineno(), e, o, a); :}
+	| expr:e AT TYPEID:t DOT OBJECTID:o actuals:a
+	    {: RESULT = new static_dispatch(curr_lineno(), e, t, o, a); :}
+	| IF expr:e1 THEN expr:e2 ELSE expr:e3 FI
+	    {: RESULT = new cond(curr_lineno(), e1, e2, e3);:}
+	| WHILE expr:e1 LOOP expr:e2 POOL
+	    {: RESULT = new loop(curr_lineno(), e1, e2);:}
+	| LBRACE blk_expr: e RBRACE 
+	    {: RESULT = new block(curr_lineno(), e); :}
+	| LET let_attr_list:l IN expr:e
+		{: RESULT = createLet(curr_lineno(), l, e, 0); :}
+	| CASE expr:e OF case_list:c ESAC 
+	    {: RESULT = new typcase(curr_lineno(), e, c); :}
+	| NEW TYPEID:t
+	    {: RESULT = new new_(curr_lineno(), t);:}
+	| ISVOID expr:e
+	    {: RESULT = new isvoid(curr_lineno(), e);:}
+	| expr:e1 PLUS expr:e2
+	    {: RESULT = new plus(curr_lineno(), e1, e2); :}
+	| expr:e1 MINUS expr:e2
+	    {: RESULT = new sub(curr_lineno(), e1, e2); :}
+	| expr:e1 MULT expr:e2
+	    {: RESULT = new mul(curr_lineno(), e1, e2); :}
+	| expr:e1 DIV expr:e2
+	    {: RESULT = new divide(curr_lineno(), e1, e2); :}
+	| NEG expr:e
+	    {: RESULT = new neg(curr_lineno(), e); :}
+	| expr:e1 LT expr:e2
+	    {: RESULT = new lt(curr_lineno(), e1, e2); :}
+	| expr:e1 EQ expr:e2
+	    {: RESULT = new eq(curr_lineno(), e1, e2); :}
+	| expr:e1 LE expr:e2
+	    {: RESULT = new leq(curr_lineno(), e1, e2); :}
+	| NOT expr:e
+	    {: RESULT = new comp(curr_lineno(), e); :}
+	| LPAREN expr:e RPAREN
+	    {: RESULT = e; :}
+	| INT_CONST:i
+	    {: RESULT = new int_const(curr_lineno(), i); :}
+	| STR_CONST:s
+	    {: RESULT = new string_const(curr_lineno(), s); :}
+	| BOOL_CONST:b
+	    {: RESULT = new bool_const(curr_lineno(), b); :}
+	| OBJECTID:o
+	    {: RESULT = new object(curr_lineno(), o); :}
+	| OBJECTID:n actuals:a
+	    {: RESULT = new dispatch(curr_lineno(),
+	                             new object(curr_lineno(), 
+	                                        AbstractTable.idtable.addString("self")),
+				     n, a); :}
+        ;
+
+let_attr_list
+	::= let_attr:f
+		{: //System.err.println("Reached first feature list production");
+			RESULT = new Features(curr_lineno()).appendElement(f);:}
+	| let_attr_list:ltl COMMA let_attr:f
+		{: //System.err.println("Reached second feature list production");
+			RESULT = ltl.appendElement(f); :}
+	;
+
+
+
+blk_expr
+    ::= expr:e SEMI
+        {: RESULT = new Expressions(curr_lineno()).appendElement(e); :}
+    | blk_expr:b expr:e SEMI
+        {: RESULT = b.appendElement(e); :}
+    | error SEMI
+	    {: //System.err.println("Reached program error production");
+	    	RESULT = new Expressions(curr_lineno()); :}
+    ;
+
+case_list
+    ::= case:c
+        {: RESULT = new Cases(curr_lineno()).appendElement(c); :}
+    | case_list:c1 case:c2
+        {: RESULT = c1.appendElement(c2); :}
+    ;
+
+case
+    ::= OBJECTID:o COLON TYPEID:t DARROW expr:e SEMI
+        {: RESULT = new branch(curr_lineno(), o, t, e); :}
+    ;
+
+actuals
+	::= LPAREN RPAREN
+	    {: RESULT = new Expressions(curr_lineno()); :}
+	| LPAREN exp_list:el RPAREN
+	    {: RESULT = el; :}
+	;
+
+
+exp_list
+	::= expr:e
+	    {: RESULT = (new Expressions(curr_lineno())).appendElement(e); :} 
+	| exp_list:el COMMA expr:e
+	    {: RESULT = el.appendElement(e); :}
+	;
